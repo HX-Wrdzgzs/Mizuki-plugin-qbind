@@ -117,12 +117,22 @@ _load_binds()
 # ==================== 导出函数（供其他插件使用） ====================
 
 def is_bound(session_id: str) -> bool:
-    """检查某个会话 ID 是否已完成绑定"""
-    return session_id in _binds
+    """
+    检查某个会话 ID 是否已完成绑定。
+    同时检查键（虚拟ID）和值（真实QQ号），因为绑定后 Gensokyo 可能将用户标识切换为真实 QQ 号。
+    """
+    return session_id in _binds or session_id in _binds.values()
 
 def get_real_qq(session_id: str) -> Optional[str]:
-    """获取某个会话 ID 绑定的真实 QQ 号，未绑定返回 None"""
-    return _binds.get(session_id)
+    """
+    获取某个会话 ID 绑定的真实 QQ 号，未绑定返回 None。
+    支持正向查找（虚拟ID → QQ）和反向查找（QQ 自身就是值）。
+    """
+    if session_id in _binds:
+        return _binds[session_id]
+    if session_id in _binds.values():
+        return session_id  # session_id 自身就是绑定值（真实 QQ 号）
+    return None
 
 async def ensure_bound(event: MessageEvent, bot: Bot) -> bool:
     """
@@ -426,8 +436,9 @@ async def confirm_handler(event: MessageEvent, bot: Bot):
                         await confirm.finish(f"❌ 绑定失败：{err_msg}")
                 else:
                     _pending_binds.pop(key, None)
-                    # 保存持久化绑定记录
+                    # 保存持久化绑定记录（同时存两份：虚拟ID→QQ 和 QQ→QQ）
                     _binds[session_id] = real_qq
+                    _binds[real_qq] = real_qq  # 避免绑定后 Gensokyo 切换标识
                     _save_binds()
                     if USE_MARKDOWN:
                         await confirm.finish(_build_markdown_msg(
@@ -573,8 +584,11 @@ async def unbind_handler(event: MessageEvent, bot: Bot, arg: Message = CommandAr
                 f"http://127.0.0.1:15630/getid?oldRowValue={session_id}&newRowValue=0&type=5"
             )
 
-            # 无论 API 解绑是否成功，都清除本地绑定记录
+            # 无论 API 解绑是否成功，都清除本地绑定记录（清除两份映射）
+            real_qq = _binds.get(session_id)
             _binds.pop(session_id, None)
+            if real_qq:
+                _binds.pop(real_qq, None)
             _save_binds()
 
             if resp.status_code == 200:
